@@ -219,7 +219,7 @@ so in this ported lib, bindings should be an alist of (SYMBOL . VALUE) such as '
 A work item is created for each element of VALUES and FUNCTION is called
 in the pool with that element.
 Returns a list of the work items added."
-  ;; like parallel call but return a list of work objects
+  ;; like parallel map but return a list of work objects
   (loop
     for value in values
     collect (thread-pool-add
