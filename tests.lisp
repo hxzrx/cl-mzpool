@@ -34,6 +34,31 @@
     (sb-concurrency:enqueue 2 queue)
     (is = 1 (utils:peek-queue queue))))
 
+(define-test queue-flush :parent utils
+  (let ((queue (sb-concurrency:make-queue)))
+    (true (sb-concurrency:queue-empty-p queue))
+    (false (utils:queue-flush queue))
+
+    (sb-concurrency:enqueue nil queue)
+    (false (sb-concurrency:queue-empty-p queue))
+    (utils:queue-flush queue)
+    (true (sb-concurrency:queue-empty-p queue))
+
+    (sb-concurrency:enqueue 1 queue)
+    (false (sb-concurrency:queue-empty-p queue))
+    (true (utils:queue-flush queue))
+    (true (sb-concurrency:queue-empty-p queue))
+
+    (sb-concurrency:enqueue 1 queue)
+    (sb-concurrency:enqueue 2 queue)
+    (sb-concurrency:enqueue 3 queue)
+    (true (utils:queue-flush queue))
+    (true (sb-concurrency:queue-empty-p queue))
+    (false (utils:queue-flush queue))))
+
+
+
+
 (define-test make-thread-pool2 :parent pool2
   (finish (mpool2:make-thread-pool))
   ;;(fail   (mpool2:make-thread-pool :keepalive-time -1)) ; this definitely fails but will signal compile error
