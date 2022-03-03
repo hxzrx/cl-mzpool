@@ -6,14 +6,14 @@
 
 (defpackage #:cl-mzpool
   (:use #:cl)
-  (:nicknames #:mzpool)
+  (:nicknames #:mpool)
   (:export #:*default-keepalive-time*
            #:thread-pool
            #:work-item
            #:make-thread-pool
            #:inspect-pool
            #:inspect-work
-           #:thread-pool-peek-pending
+           #:thread-pool-peek-backlog
            #:thread-pool-add
            #:thread-pool-add-many
            #:thread-pool-cancel-item
@@ -50,7 +50,7 @@
    (%initial-bindings :initarg :initial-bindings :reader thread-pool-initial-bindings)
    (%lock :reader thread-pool-lock)
    (%cvar :reader thread-pool-cvar)
-   (%pending           :initform '() :accessor thread-pool-pending)
+   (%backlog           :initform '() :accessor thread-pool-backlog)
    (%working-threads   :initform '() :accessor thread-pool-working-threads)
    (%idle-threads      :initform '() :accessor thread-pool-idle-threads)
    (%n-total-threads   :initform 0   :accessor thread-pool-n-total-threads)
@@ -66,7 +66,7 @@
 (defun inspect-pool (pool &optional (inspect-work-p nil))
   (format nil "name: ~d, pending works: ~d, total threads: ~d, working threads: ~d, idle threads: ~d, blocked threads: ~d, shutdownp: ~d~@[, pending works: ~%~{~d~^~&~}~]"
           (thread-pool-name pool)
-          (length (thread-pool-pending pool))
+          (length (thread-pool-backlog pool))
           (thread-pool-n-total-threads pool)
           (length (thread-pool-working-threads pool))
           (length (thread-pool-idle-threads pool))
@@ -74,7 +74,7 @@
           (thread-pool-shutdown-p pool)
           (when inspect-work-p
             (mapcar #'(lambda(work) (inspect-work work t))
-                    (thread-pool-pending pool)))))
+                    (thread-pool-backlog pool)))))
 
 (defmethod print-object ((pool thread-pool) stream)
   (print-unreadable-object (pool stream :type t)
@@ -97,9 +97,9 @@
   (print-unreadable-object (work stream :type t)
     (format stream (inspect-work work))))
 
-(defun thread-pool-peek-pending (pool)
+(defun thread-pool-peek-backlog (pool)
   "Return the top pending work of the pool."
-  (first (thread-pool-pending pool)))
+  (first (thread-pool-backlog pool)))
 
 (defun make-thread-pool (&key name initial-bindings (keepalive-time *default-keepalive-time*))
   "Create a new thread-pool."
@@ -134,8 +134,8 @@
              (loop                                                      ; pick up a work item in an infinite loop
                    (when (thread-pool-shutdown-p thread-pool)
                      (exit-while-idle))
-                   (when (not (endp (thread-pool-pending thread-pool))) ; pick up a work-item from the pending queue
-                     (setf work (pop (thread-pool-pending thread-pool)))
+                   (when (not (endp (thread-pool-backlog thread-pool))) ; pick up a work-item from the pending queue
+                     (setf work (pop (thread-pool-backlog thread-pool)))
                      ;;(setf (third thread-name) work)
                      #+sbcl (setf (sb-thread:thread-name self)
                                   (concatenate 'string "Thread pool worker: " (work-item-name work)))
@@ -198,7 +198,7 @@ so in this ported lib, bindings should be an alist of (SYMBOL . VALUE) such as '
     (bt:with-lock-held ((thread-pool-lock thread-pool))
       (when (thread-pool-shutdown-p thread-pool)
         (error "Attempted to add work item to shut down thread pool ~S" thread-pool))
-      (setf (thread-pool-pending thread-pool) (append (thread-pool-pending thread-pool) (list work))) ; add new work to pending
+      (setf (thread-pool-backlog thread-pool) (append (thread-pool-backlog thread-pool) (list work))) ; add new work to backlog
       (when (and (endp (thread-pool-idle-threads thread-pool))
                  (< (thread-pool-n-concurrent-threads thread-pool)
                     *worker-num*))
@@ -236,8 +236,8 @@ Returns true if the item was successfully cancelled,
 false if the item had finished or is currently running on a worker thread."
   (let ((thread-pool (work-item-thread-pool item)))
     (bt:with-lock-held ((thread-pool-lock thread-pool))
-      (cond ((find item (thread-pool-pending thread-pool))
-             (setf (thread-pool-pending thread-pool) (remove item (thread-pool-pending thread-pool)))
+      (cond ((find item (thread-pool-backlog thread-pool))
+             (setf (thread-pool-backlog thread-pool) (remove item (thread-pool-backlog thread-pool)))
              t)
             (t
              nil)))))
@@ -248,8 +248,8 @@ Returns a list of all cancelled items.
 Does not cancel work in progress."
   (bt:with-lock-held ((thread-pool-lock thread-pool))
     (prog1
-        (thread-pool-pending thread-pool)
-      (setf (thread-pool-pending thread-pool) '()))))
+        (thread-pool-backlog thread-pool)
+      (setf (thread-pool-backlog thread-pool) '()))))
 
 (defun thread-pool-shutdown (thread-pool &key abort)
   "Shutdown THREAD-POOL.
@@ -262,7 +262,7 @@ If ABORT is true then worker threads will be terminated
 via TERMINATE-THREAD."
   (bt:with-lock-held ((thread-pool-lock thread-pool))
     (setf (thread-pool-shutdown-p thread-pool) t)
-    (setf (thread-pool-pending thread-pool) '())
+    (setf (thread-pool-backlog thread-pool) '())
     (when abort
       (dolist (thread (thread-pool-working-threads thread-pool))
         (bt:destroy-thread thread))
