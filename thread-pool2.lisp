@@ -1,43 +1,6 @@
 ;;;; Experimentally implemente mzpool with atomic operations in the pool worker threads' infinite loop.
 
-
 (in-package :cl-mzpool2)
-
-(defvar *worker-num* (max 4 (cpus:get-number-of-processors)))
-
-(defparameter *default-keepalive-time* (the (unsigned-byte 64) 60) ; 那些无限循环的大型任务不能放到线程池
-  "Default value for the idle worker thread keepalive time. Note that it's cpu time, not real time.")
-
-(defun peek-queue (queue)
-  (cadr (sb-concurrency::queue-head queue)))
-
-(defun queue-flush (queue)
-  "Flush the queue to an empty queue."
-  (declare (optimize speed))
-  (loop (let* ((head (sb-concurrency::queue-head queue))
-               (tail (sb-concurrency::queue-tail queue))
-               (next (cdr head)))
-          (typecase next
-            (null (return nil))
-            (cons (when (and (eq head (sb-ext:compare-and-swap (sb-concurrency::queue-head queue)
-                                                               head head))
-                             (eq nil (sb-ext:compare-and-swap (cdr (sb-concurrency::queue-tail queue))
-                                                              nil nil)))
-                    (setf (car tail) sb-concurrency::+dummy+
-                          (sb-concurrency::queue-head queue) (sb-concurrency::queue-tail queue))
-                    (return t)))))))
-
-(defmacro unwind-protect-unwind-only (protected-form &body cleanup-forms)
-  "Like UNWIND-PROTECT, but CLEANUP-FORMS are not executed if a normal return occurs."
-  (let ((abnormal-return (gensym "ABNORMAL-RETURN")))
-    `(let ((,abnormal-return t))
-       (unwind-protect
-            (multiple-value-prog1
-                ,protected-form
-              (setf ,abnormal-return nil))
-         (when ,abnormal-return
-           ,@cleanup-forms)))))
-
 
 (defstruct (thread-pool (:constructor make-thread-pool (&key name initial-bindings keepalive-time))
                         (:copier nil)

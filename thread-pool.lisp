@@ -4,25 +4,7 @@
 ;;;; Mezzano/system/sync.lisp
 ;;;; Mezzano/supervisor/sync.lisp
 
-
 (in-package :cl-mzpool)
-
-(defvar *worker-num* (max 4 (cpus:get-number-of-processors)))
-
-(defparameter *default-keepalive-time* 60
-  "Default value for the idle worker thread keepalive time. Note that it's cpu time, not real time.")
-
-;; Mezzano/system/basic-macros.lisp
-(defmacro unwind-protect-unwind-only (protected-form &body cleanup-forms)
-  "Like UNWIND-PROTECT, but CLEANUP-FORMS are not executed if a normal return occurs."
-  (let ((abnormal-return (gensym "ABNORMAL-RETURN")))
-    `(let ((,abnormal-return t))
-       (unwind-protect
-            (multiple-value-prog1
-                ,protected-form
-              (setf ,abnormal-return nil))
-         (when ,abnormal-return
-           ,@cleanup-forms)))))
 
 ;; Mezzano/system/thread-pool.lisp
 (defclass thread-pool ()
