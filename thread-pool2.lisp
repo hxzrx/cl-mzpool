@@ -2,27 +2,29 @@
 
 (in-package :cl-mzpool2)
 
-(defstruct (thread-pool (:constructor make-thread-pool (&key name initial-bindings keepalive-time))
+(defstruct (thread-pool (:constructor make-thread-pool (&key name worker-num keepalive-time initial-bindings))
                         (:copier nil)
                         (:predicate thread-pool-p))
   (name              (concatenate 'string "THREAD-POOL-" (string (gensym))) :type string)
   (initial-bindings  nil            :type list)
   (lock              (bt:make-lock "THREAD-POOL-LOCK"))
   (cvar              (bt:make-condition-variable :name "THREAD-POOL-CVAR"))
-  (backlog           (sb-concurrency:make-queue :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
-  (thread-table      (make-hash-table :weakness :value :synchronized t)     :type hash-table)
-  (working-threads   0              :type (unsigned-byte 64)) ; 正在工作的线程数量
-  (idle-threads      0              :type (unsigned-byte 64)) ; 闲置线程数量
-  (n-total-threads   0              :type (unsigned-byte 64)) ; 总线程数量
-  (n-blocked-threads 0              :type (unsigned-byte 64)) ; 被阻塞线程数量
+  (backlog           (sb-concurrency:make-queue  :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
+  (worker-num        *worker-num*   :type fixnum)             ; num of worker threads
+  (thread-table      (make-hash-table :weakness :value :synchronized t) :type hash-table) ; may have some dead threads due to gc
+  (working-threads   0              :type (unsigned-byte 64)) ; num of current busy working threads
+  (idle-threads      0              :type (unsigned-byte 64)) ; num of current idle threads
+  (n-total-threads   0              :type (unsigned-byte 64)) ; num of current total threads
+  (n-blocked-threads 0              :type (unsigned-byte 64)) ; num of blocked threads
   (shutdown-p        nil)
   (keepalive-time    *default-keepalive-time* :type (unsigned-byte 64)))
 
 (defun inspect-pool (pool &optional (inspect-work-p nil))
-  "返回线程池状态文本"
-  (format nil "name: ~d, backlog of work: ~d, total threads: ~d, working threads: ~d, idle threads: ~d, blocked threads: ~d, shutdownp: ~d~@[, pending works: ~%~{~d~^~&~}~]"
+  "Return a detail description of the thread pool."
+  (format nil "name: ~d, backlog of work: ~d, max workers: ~d, total threads: ~d, working threads: ~d, idle threads: ~d, blocked threads: ~d, shutdownp: ~d~@[, pending works: ~%~{~d~^~&~}~]"
           (thread-pool-name pool)
           (sb-concurrency:queue-count (thread-pool-backlog pool))
+          (thread-pool-worker-num pool)
           (thread-pool-n-total-threads pool)
           (thread-pool-working-threads pool)
           (thread-pool-idle-threads pool)
@@ -48,21 +50,24 @@
 (defstruct (work-item (:constructor make-work-item (&key name function thread-pool desc))
                       (:copier nil)
                       (:predicate work-item-p))
-  (name nil :type string)
+  (name)
   (function nil :type function)
   (thread-pool nil :type thread-pool)
   (result nil :type list)
   (status :ready :type symbol) ; :running :aborted :ready :finished :cancelled :rejected
-  (lock (bt2:make-lock))    ; 用于promise
+  (lock (bt2:make-lock))       ; may be useful in the future
   (cvar (bt2:make-condition-variable))
-  (desc nil :type string))
+  (desc))
 
-(defun inspect-work (work &optional (simple-mode nil))
-  (format nil (format nil "name: ~d, desc: ~d~@[, pool: ~d~]"
+(defun inspect-work (work &optional (simple-mode t))
+    "Return a detail description of the work item."
+  (format nil (format nil "name: ~d, desc: ~d~@[, pool: ~d~], status: ~d, result: ~d."
                       (work-item-name work)
                       (work-item-desc work)
                       (unless simple-mode
-                        (thread-pool-name (work-item-thread-pool work))))))
+                        (thread-pool-name (work-item-thread-pool work)))
+                      (work-item-status work)
+                      (work-item-result work))))
 
 (defmethod print-object ((work work-item) stream)
   (print-unreadable-object (work stream :type t)
@@ -72,7 +77,7 @@
   (let* ((self (bt2:current-thread)))
     (loop (let ((work nil))
             ;; 通过无锁的原子方法实现, 线程知道自己是否闲置就行, 有多少忙碌多少闲置的工作线程可通过计算实现
-            (with-slots (backlog keepalive-time lock cvar idle-threads) thread-pool
+            (with-slots (backlog worker-num keepalive-time lock cvar idle-threads) thread-pool
               (sb-ext:atomic-decf (thread-pool-working-threads thread-pool))
               (sb-ext:atomic-incf (thread-pool-idle-threads thread-pool))
               (setf (sb-thread:thread-name self) "Thread pool idle worker")
@@ -95,7 +100,7 @@
                                                                             (declare (ignore x))
                                                                             :running))
                             (return)))
-                        (when (> (thread-pool-n-concurrent-threads thread-pool) *worker-num*)
+                        (when (> (thread-pool-n-concurrent-threads thread-pool) worker-num)
                           (exit-while-idle))
                         (let* ((end-idle-time (+ start-idle-time
                                                  (* keepalive-time internal-time-units-per-second)))
@@ -138,13 +143,13 @@ thread pool's initial-bindings."
                              function)
                :thread-pool thread-pool
                :desc desc)))
-    (with-slots (backlog) thread-pool
+    (with-slots (backlog worker-num) thread-pool
       (when (thread-pool-shutdown-p thread-pool)
         (error "Attempted to add work item to a shut down thread pool ~S" thread-pool))
       (sb-concurrency:enqueue work backlog)
       (when (and (<= (thread-pool-idle-threads thread-pool) 0)
                  (< (thread-pool-n-concurrent-threads thread-pool)
-                    *worker-num*))
+                    worker-num))
         (bt2:make-thread (lambda () (thread-pool-main thread-pool))
                          :name "Idle Worker"
                          :initial-bindings (thread-pool-initial-bindings thread-pool))
