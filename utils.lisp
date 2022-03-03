@@ -1,6 +1,6 @@
 (in-package :utils)
 
-(defvar *worker-num* (max 4 (cpus:get-number-of-processors)))
+(defvar *default-worker-num* (max 4 (cpus:get-number-of-processors)))
 
 (defparameter *default-keepalive-time* 60
   "Default value for the idle worker thread keepalive time. Note that it's cpu time, not real time.")
