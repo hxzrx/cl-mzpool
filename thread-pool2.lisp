@@ -9,8 +9,8 @@
   (initial-bindings  nil            :type list)
   (lock              (bt:make-lock "THREAD-POOL-LOCK"))
   (cvar              (bt:make-condition-variable :name "THREAD-POOL-CVAR"))
-  (backlog          (sb-concurrency:make-queue :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
-  (thread-list       nil            :type list)               ; 线程对象列表
+  (backlog           (sb-concurrency:make-queue :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
+  (thread-table      (make-hash-table :weakness :value :synchronized t)     :type hash-table)
   (working-threads   0              :type (unsigned-byte 64)) ; 正在工作的线程数量
   (idle-threads      0              :type (unsigned-byte 64)) ; 闲置线程数量
   (n-total-threads   0              :type (unsigned-byte 64)) ; 总线程数量
@@ -45,13 +45,17 @@
   (- (thread-pool-n-total-threads thread-pool)
      (thread-pool-n-blocked-threads thread-pool)))
 
-(defstruct work-item
-  name
-  function
-  thread-pool
-  result
-  status ; :running :aborted :ready :finished :cancelled
-  desc)
+(defstruct (work-item (:constructor make-work-item (&key name function thread-pool desc))
+                      (:copier nil)
+                      (:predicate work-item-p))
+  (name nil :type string)
+  (function nil :type function)
+  (thread-pool nil :type thread-pool)
+  (result nil :type list)
+  (status :ready :type symbol) ; :running :aborted :ready :finished :cancelled :rejected
+  (lock (bt2:make-lock))    ; 用于promise
+  (cvar (bt2:make-condition-variable))
+  (desc nil :type string))
 
 (defun inspect-work (work &optional (simple-mode nil))
   (format nil (format nil "name: ~d, desc: ~d~@[, pool: ~d~]"
@@ -104,13 +108,16 @@
                                                 :timeout (/ idle-time-remaining internal-time-units-per-second))))))))
             ;; 线程执行工作任务
             (unwind-protect-unwind-only
-                (catch 'terminate-work ; catch用于工作内部的非局部退出
-                  (funcall (work-item-function work)))
-              (sb-ext:atomic-decf (thread-pool-working-threads thread-pool))
-              (sb-ext:atomic-decf (thread-pool-n-total-threads thread-pool))
-              (setf (work-item-status work) :aborted))))))
+                (catch 'terminate-work
+                  (let ((result (multiple-value-list (funcall (work-item-function work)))))
+                    (setf (work-item-result work) result
+                          (work-item-status work) :finished))))
+            (sb-ext:atomic-decf (thread-pool-working-threads thread-pool))
+            (sb-ext:atomic-decf (thread-pool-n-total-threads thread-pool))
+            (setf (work-item-status work) :rejected)
+            (bt2:destroy-thread self)))))
 
-(defun thread-pool-add (function thread-pool &key name priority bindings desc)
+(defun thread-pool-add (function thread-pool &key (name "") priority bindings desc)
   "Add a work item to the thread-pool.
 Functions are called concurrently and in FIFO order.
 A work item is returned, which can be passed to THREAD-POOL-CANCEL-ITEM
@@ -120,40 +127,29 @@ that should be active when FUNCTION is called. These override the
 thread pool's initial-bindings."
   (declare (ignore priority)) ; TODO
   (check-type function function)
-  (let ((work (make-instance 'work-item ;
-                             :function (if bindings
-                                           (let ((vars (mapcar #'first bindings))
-                                                 (vals (mapcar #'second bindings)))
-                                             (lambda ()
-                                               (progv vars vals
-                                                 (funcall function))))
-                                           function)
-                             :name name
-                             :thread-pool thread-pool
-                             :status :ready
-                             :desc desc)))
-    ;; 可以通过原子操作实现无锁版本
+  (let ((work (make-work-item
+               :name name
+               :function (if bindings
+                             (let ((vars (mapcar #'first bindings))
+                                   (vals (mapcar #'second bindings)))
+                               (lambda ()
+                                 (progv vars vals
+                                   (funcall function))))
+                             function)
+               :thread-pool thread-pool
+               :desc desc)))
     (with-slots (backlog) thread-pool
       (when (thread-pool-shutdown-p thread-pool)
-        (error "Attempted to add work item to shut down thread pool ~S" thread-pool))
+        (error "Attempted to add work item to a shut down thread pool ~S" thread-pool))
       (sb-concurrency:enqueue work backlog)
       (when (and (<= (thread-pool-idle-threads thread-pool) 0)
                  (< (thread-pool-n-concurrent-threads thread-pool)
                     *worker-num*))
-        ;; There are no idle threads and there are more logical cores than
-        ;; currently running threads. Create a new thread for this work item.
-        ;; Push it on the active list to make the logic in T-P-MAIN work out.
-        #+:ignore(push (bt2:make-thread (lambda () (thread-pool-main thread-pool))      ; create a new worker thread
-                              ;;:name `(thread-pool-worker ,thread-pool nil)  ; list type of name was not applicable in sbcl
-                              :name "Idle Worker"
-                              :initial-bindings (thread-pool-initial-bindings thread-pool))
-                       (thread-pool-working-threads thread-pool))
-        (bt2:make-thread (lambda () (thread-pool-main thread-pool))      ; create a new worker thread
+        (bt2:make-thread (lambda () (thread-pool-main thread-pool))
                          :name "Idle Worker"
                          :initial-bindings (thread-pool-initial-bindings thread-pool))
         (sb-ext:atomic-incf (thread-pool-working-threads thread-pool))
         (sb-ext:atomic-incf (thread-pool-n-total-threads thread-pool)))
-      ;; 通知线程池中正在等待的线程
       (bt2:condition-notify (thread-pool-cvar thread-pool)))
     work))
 
@@ -180,7 +176,6 @@ false if the item had finished or is currently running on a worker thread."
                                                          (declare (ignore x))
                                                          :cancelled)))
 
-
 (defun thread-pool-flush (thread-pool)
   "Cancel all outstanding work on THREAD-POOL.
 Returns a list of all cancelled items.
@@ -204,12 +199,12 @@ Once a thread pool has been shut down, no further work
 can be added unless it's been restarted by thread-pool-restart.
 If ABORT is true then worker threads will be terminated
 via TERMINATE-THREAD."
-  (with-slots (shutdown-p backlog thread-list) thread-pool
+  (with-slots (shutdown-p backlog thread-table) thread-pool
     (setf shutdown-p t)
     (thread-pool-flush thread-pool)
     (when abort
-      (dolist (thread thread-list)
-        (bt2:destroy-thread thread)))
+      (dolist (thread (alexandria:hash-table-values thread-table))
+        (ignore-errors (bt2:destroy-thread thread))))
     (bt2:condition-notify (thread-pool-cvar thread-pool)))
   (values))
 
