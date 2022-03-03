@@ -1,22 +1,5 @@
 ;;;; Experimentally implemente mzpool with atomic operations in the pool worker threads' infinite loop.
 
-(defpackage #:cl-mzpool2
-  (:use #:cl)
-  (:nicknames #:mpool2)
-  (:export #:*default-keepalive-time*
-           #:thread-pool
-           #:work-item
-           #:make-thread-pool
-           #:inspect-pool
-           #:inspect-work
-           #:thread-pool-peek-backlog
-           #:thread-pool-add
-           #:thread-pool-add-many
-           #:thread-pool-cancel-item
-           #:thread-pool-flush
-           #:thread-pool-shutdown
-           #:thread-pool-restart
-           #:terminate-work))
 
 (in-package :cl-mzpool2)
 
@@ -44,8 +27,6 @@
                           (sb-concurrency::queue-head queue) (sb-concurrency::queue-tail queue))
                     (return t)))))))
 
-
-;; Mezzano/system/basic-macros.lisp
 (defmacro unwind-protect-unwind-only (protected-form &body cleanup-forms)
   "Like UNWIND-PROTECT, but CLEANUP-FORMS are not executed if a normal return occurs."
   (let ((abnormal-return (gensym "ABNORMAL-RETURN")))

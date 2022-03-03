@@ -4,26 +4,6 @@
 ;;;; Mezzano/system/sync.lisp
 ;;;; Mezzano/supervisor/sync.lisp
 
-(defpackage #:cl-mzpool
-  (:use #:cl)
-  (:nicknames #:mpool)
-  (:export #:*default-keepalive-time*
-           #:thread-pool
-           #:work-item
-           #:make-thread-pool
-           #:inspect-pool
-           #:inspect-work
-           #:thread-pool-peek-backlog
-           #:thread-pool-add
-           #:thread-pool-add-many
-           #:thread-pool-cancel-item
-           #:thread-pool-flush
-           #:thread-pool-shutdown
-           #:thread-pool-restart
-           ;; Catch tag that can be used as a throw target to
-           ;; leave the current task.
-           #:terminate-work))
-
 
 (in-package :cl-mzpool)
 
