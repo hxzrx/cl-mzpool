@@ -1,5 +1,13 @@
-(defpackage #:cl-mzpool
+(defpackage #:utils
   (:use #:cl)
+  (:export #:*worker-num*
+           #:*default-keepalive-time*
+           #:unwind-protect-unwind-only)
+  #+:sbcl(:export #:peek-queue
+                  #:queue-flush))
+
+(defpackage #:cl-mzpool
+  (:use #:cl #:utils)
   (:nicknames #:mpool)
   (:export #:*default-keepalive-time*
            #:thread-pool
@@ -19,7 +27,7 @@
            #:terminate-work))
 
 (defpackage #:cl-mzpool2
-  (:use #:cl)
+  (:use #:cl #:utils)
   (:nicknames #:mpool2)
   (:export #:*default-keepalive-time*
            #:thread-pool
