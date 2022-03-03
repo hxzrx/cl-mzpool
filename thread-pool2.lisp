@@ -2,7 +2,7 @@
 
 (in-package :cl-mzpool2)
 
-(defstruct (thread-pool (:constructor make-thread-pool (&key name worker-num keepalive-time initial-bindings))
+(defstruct (thread-pool (:constructor make-thread-pool (&key name max-worker-num keepalive-time initial-bindings))
                         (:copier nil)
                         (:predicate thread-pool-p))
   (name              (concatenate 'string "THREAD-POOL-" (string (gensym))) :type string)
@@ -10,12 +10,12 @@
   (lock              (bt:make-lock "THREAD-POOL-LOCK"))
   (cvar              (bt:make-condition-variable :name "THREAD-POOL-CVAR"))
   (backlog           (sb-concurrency:make-queue  :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
-  (worker-num        *worker-num*   :type fixnum)             ; num of worker threads
+  (max-worker-num    *default-worker-num* :type fixnum)       ; num of worker threads
   (thread-table      (make-hash-table :weakness :value :synchronized t) :type hash-table) ; may have some dead threads due to gc
-  (working-threads   0              :type (unsigned-byte 64)) ; num of current busy working threads
-  (idle-threads      0              :type (unsigned-byte 64)) ; num of current idle threads
-  (n-total-threads   0              :type (unsigned-byte 64)) ; num of current total threads
-  (n-blocked-threads 0              :type (unsigned-byte 64)) ; num of blocked threads
+  (working-num       0              :type (unsigned-byte 64)) ; num of current busy working threads
+  (idle-num          0              :type (unsigned-byte 64)) ; num of current idle threads
+  (total-threads-num 0              :type (unsigned-byte 64)) ; num of current total threads
+  (blocked-num       0              :type (unsigned-byte 64)) ; num of blocked threads
   (shutdown-p        nil)
   (keepalive-time    *default-keepalive-time* :type (unsigned-byte 64)))
 
@@ -24,11 +24,11 @@
   (format nil "name: ~d, backlog of work: ~d, max workers: ~d, total threads: ~d, working threads: ~d, idle threads: ~d, blocked threads: ~d, shutdownp: ~d~@[, pending works: ~%~{~d~^~&~}~]"
           (thread-pool-name pool)
           (sb-concurrency:queue-count (thread-pool-backlog pool))
-          (thread-pool-worker-num pool)
-          (thread-pool-n-total-threads pool)
-          (thread-pool-working-threads pool)
-          (thread-pool-idle-threads pool)
-          (thread-pool-n-blocked-threads pool)
+          (thread-pool-max-worker-num pool)
+          (thread-pool-total-threads-num pool)
+          (thread-pool-working-num pool)
+          (thread-pool-idle-num pool)
+          (thread-pool-blocked-num pool)
           (thread-pool-shutdown-p pool)
           (when inspect-work-p
             (mapcar #'(lambda(work) (inspect-work work t))
@@ -44,8 +44,8 @@
 
 (defun thread-pool-n-concurrent-threads (thread-pool)
   "Return the number of threads in the pool are not blocked."
-  (- (thread-pool-n-total-threads thread-pool)
-     (thread-pool-n-blocked-threads thread-pool)))
+  (- (thread-pool-total-threads-num thread-pool)
+     (thread-pool-blocked-num thread-pool)))
 
 (defstruct (work-item (:constructor make-work-item (&key name function thread-pool desc))
                       (:copier nil)
@@ -76,15 +76,14 @@
 (defun thread-pool-main (thread-pool)
   (let* ((self (bt2:current-thread)))
     (loop (let ((work nil))
-            ;; 通过无锁的原子方法实现, 线程知道自己是否闲置就行, 有多少忙碌多少闲置的工作线程可通过计算实现
-            (with-slots (backlog worker-num keepalive-time lock cvar idle-threads) thread-pool
-              (sb-ext:atomic-decf (thread-pool-working-threads thread-pool))
-              (sb-ext:atomic-incf (thread-pool-idle-threads thread-pool))
+            (with-slots (backlog max-worker-num keepalive-time lock cvar idle-num) thread-pool
+              (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
+              (sb-ext:atomic-incf (thread-pool-idle-num thread-pool))
               (setf (sb-thread:thread-name self) "Thread pool idle worker")
               (let ((start-idle-time (get-internal-run-time)))
                 (flet ((exit-while-idle ()
-                         (sb-ext:atomic-decf (thread-pool-idle-threads thread-pool))
-                         (sb-ext:atomic-decf (thread-pool-n-total-threads thread-pool))
+                         (sb-ext:atomic-decf (thread-pool-idle-num thread-pool))
+                         (sb-ext:atomic-decf (thread-pool-total-threads-num thread-pool))
                          (return-from thread-pool-main)))
                   (loop (when (thread-pool-shutdown-p thread-pool)
                           (exit-while-idle))
@@ -94,13 +93,13 @@
                             (setf work wk)
                             #+sbcl (setf (sb-thread:thread-name self)
                                          (concatenate 'string "Thread pool worker: " (work-item-name work)))
-                            (sb-ext:atomic-decf (thread-pool-idle-threads thread-pool))
-                            (sb-ext:atomic-incf (thread-pool-working-threads thread-pool))
+                            (sb-ext:atomic-decf (thread-pool-idle-num thread-pool))
+                            (sb-ext:atomic-incf (thread-pool-working-num thread-pool))
                             (sb-ext:atomic-update (work-item-status wk) #'(lambda (x)
                                                                             (declare (ignore x))
                                                                             :running))
                             (return)))
-                        (when (> (thread-pool-n-concurrent-threads thread-pool) worker-num)
+                        (when (> (thread-pool-n-concurrent-threads thread-pool) max-worker-num)
                           (exit-while-idle))
                         (let* ((end-idle-time (+ start-idle-time
                                                  (* keepalive-time internal-time-units-per-second)))
@@ -117,8 +116,8 @@
                   (let ((result (multiple-value-list (funcall (work-item-function work)))))
                     (setf (work-item-result work) result
                           (work-item-status work) :finished))))
-            (sb-ext:atomic-decf (thread-pool-working-threads thread-pool))
-            (sb-ext:atomic-decf (thread-pool-n-total-threads thread-pool))
+            (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
+            (sb-ext:atomic-decf (thread-pool-total-threads-num thread-pool))
             (setf (work-item-status work) :rejected)
             (bt2:destroy-thread self)))))
 
@@ -143,18 +142,18 @@ thread pool's initial-bindings."
                              function)
                :thread-pool thread-pool
                :desc desc)))
-    (with-slots (backlog worker-num) thread-pool
+    (with-slots (backlog max-worker-num) thread-pool
       (when (thread-pool-shutdown-p thread-pool)
         (error "Attempted to add work item to a shut down thread pool ~S" thread-pool))
       (sb-concurrency:enqueue work backlog)
-      (when (and (<= (thread-pool-idle-threads thread-pool) 0)
+      (when (and (<= (thread-pool-idle-num thread-pool) 0)
                  (< (thread-pool-n-concurrent-threads thread-pool)
-                    worker-num))
+                    max-worker-num))
         (bt2:make-thread (lambda () (thread-pool-main thread-pool))
                          :name "Idle Worker"
                          :initial-bindings (thread-pool-initial-bindings thread-pool))
-        (sb-ext:atomic-incf (thread-pool-working-threads thread-pool))
-        (sb-ext:atomic-incf (thread-pool-n-total-threads thread-pool)))
+        (sb-ext:atomic-incf (thread-pool-working-num thread-pool))
+        (sb-ext:atomic-incf (thread-pool-total-threads-num thread-pool)))
       (bt2:condition-notify (thread-pool-cvar thread-pool)))
     work))
 
@@ -177,9 +176,10 @@ Returns a list of the work items added."
   "Cancel a work item, removing it from its thread-pool.
 Returns true if the item was successfully cancelled,
 false if the item had finished or is currently running on a worker thread."
-  (sb-ext:atomic-update (work-item-status work-item) #'(lambda (x)
-                                                         (declare (ignore x))
-                                                         :cancelled)))
+  (sb-ext:atomic-update (work-item-status work-item)
+                        #'(lambda (x)
+                            (declare (ignore x))
+                            :cancelled)))
 
 (defun thread-pool-flush (thread-pool)
   "Cancel all outstanding work on THREAD-POOL.
@@ -252,10 +252,10 @@ is bound to NIL for the duration of the call."))
   (unwind-protect
        (progn
          (bt2:with-lock-held ((thread-pool-lock thread-pool))
-           (incf (thread-pool-n-blocked-threads thread-pool)))
+           (incf (thread-pool-blocked-num thread-pool)))
          (apply blocking-function arguments))
     (bt2:with-lock-held ((thread-pool-lock thread-pool))
-      (decf (thread-pool-n-blocked-threads thread-pool)))))
+      (decf (thread-pool-blocked-num thread-pool)))))
 
 ;;;; Mezzano/supervisor/sync.lisp
 (defmacro thread-pool-blocking-hijack (function-name &rest arguments)
