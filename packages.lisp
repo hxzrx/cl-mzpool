@@ -1,6 +1,6 @@
 (defpackage #:utils
   (:use #:cl)
-  (:export #:*worker-num*
+  (:export #:*default-worker-num*
            #:*default-keepalive-time*
            #:unwind-protect-unwind-only)
   #+:sbcl(:export #:peek-queue
