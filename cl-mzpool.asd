@@ -7,5 +7,6 @@
                :bordeaux-threads
                :alexandria)
   :serial t
-  :components ((:file "thread-pool")
+  :components ((:file "packages")
+               (:file "thread-pool")
                #+sbcl (:file "thread-pool2")))
