@@ -60,7 +60,7 @@
   (desc))
 
 (defun inspect-work (work &optional (simple-mode t))
-    "Return a detail description of the work item."
+  "Return a detail description of the work item."
   (format nil (format nil "name: ~d, desc: ~d~@[, pool: ~d~], status: ~d, result: ~d."
                       (work-item-name work)
                       (work-item-desc work)
@@ -87,7 +87,6 @@
                          (return-from thread-pool-main)))
                   (loop (when (thread-pool-shutdown-p thread-pool)
                           (exit-while-idle))
-                        ;; 队列中有未处理工作, 就获取这项工作并退出这个loop, 否则就不停循环等待新工作
                         (alexandria:when-let (wk (sb-concurrency:dequeue backlog))
                           (when (eq (work-item-status wk) :ready)
                             (setf work wk)
@@ -110,7 +109,6 @@
                             (bt2:condition-wait cvar
                                                 lock
                                                 :timeout (/ idle-time-remaining internal-time-units-per-second))))))))
-            ;; 线程执行工作任务
             (unwind-protect-unwind-only
                 (catch 'terminate-work
                   (let ((result (multiple-value-list (funcall (work-item-function work)))))
@@ -219,9 +217,9 @@ This function set the slot %shutdown nil so that the pool will be used then.
 Return t if the pool has been shutdown, and return nil if the pool was active"
   (if (thread-pool-shutdown-p thread-pool)
       (progn (sb-ext:atomic-update (thread-pool-shutdown-p thread-pool)
-                            #'(lambda (x)
-                                (declare (ignore x))
-                                nil))
+                                   #'(lambda (x)
+                                       (declare (ignore x))
+                                       nil))
              t)
       nil))
 
