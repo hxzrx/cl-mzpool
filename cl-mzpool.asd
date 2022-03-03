@@ -9,6 +9,7 @@
   :serial t
   :in-order-to ((test-op (test-op "cl-mzpool/tests")))
   :components ((:file "packages")
+               (:file "utils")
                (:file "thread-pool")
                #+sbcl (:file "thread-pool2")))
 
