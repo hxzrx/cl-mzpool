@@ -44,6 +44,7 @@
            #:add-work
            #:add-works
            #:get-result
+           #:get-status
            #:thread-pool-cancel-item
            #:thread-pool-flush
            #:thread-pool-shutdown

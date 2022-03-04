@@ -86,6 +86,10 @@ or the status of the work if the work has not finished."
         (values result t)
         (values status nil))))
 
+(defmethod get-status ((work work-item))
+  "Return the status of an work-item instance."
+  (work-item-status work))
+
 (defun thread-pool-main (thread-pool)
   (let* ((self (bt2:current-thread)))
     (loop (let ((work nil))
