@@ -145,7 +145,7 @@ or nil if the work has not finished."
                    :initial-bindings (thread-pool-initial-bindings pool)))
 
 
-(defun add (function thread-pool &key (name "") priority bindings desc)
+(defun add-task (function thread-pool &key (name "") priority bindings desc)
   "Add a work item to the thread-pool.
 Functions are called concurrently and in FIFO order.
 A work item is returned, which can be passed to THREAD-POOL-CANCEL-ITEM
@@ -182,18 +182,18 @@ thread pool's initial-bindings."
       (bt2:condition-notify (thread-pool-cvar thread-pool)))
     work))
 
-(defun add-many (function values thread-pool &key name priority bindings)
+(defun add-tasks (function values thread-pool &key name priority bindings)
   "Add many work items to the pool.
 A work item is created for each element of VALUES and FUNCTION is called
 in the pool with that element.
 Returns a list of the work items added."
   (loop for value in values
-        collect (add (let ((value value))
-                       (lambda () (funcall function value)))
-                     thread-pool
-                     :name name
-                     :priority priority
-                     :bindings bindings)))
+        collect (add-task (let ((value value))
+                            (lambda () (funcall function value)))
+                          thread-pool
+                          :name name
+                          :priority priority
+                          :bindings bindings)))
 
 (defmethod add-work ((work work-item) &optional (pool *default-thread-pool*) priority)
   "Enqueue a work-item to a thread-pool.
@@ -233,7 +233,7 @@ false if the item had finished or is currently running on a worker thread."
                             (declare (ignore x))
                             :cancelled)))
 
-(defun thread-pool-flush (thread-pool)
+(defun pool-flush (thread-pool)
   "Cancel all outstanding work on THREAD-POOL.
 Returns a list of all cancelled items.
 Does not cancel work in progress."
@@ -247,7 +247,7 @@ Does not cancel work in progress."
     (prog1 (sb-concurrency:list-queue-contents backlog)
       (queue-flush backlog))))
 
-(defun thread-pool-shutdown (thread-pool &key abort)
+(defun pool-shutdown (thread-pool &key abort)
   "Shutdown THREAD-POOL.
 This cancels all outstanding work on THREAD-POOL
 and notifies the worker threads that they should
@@ -265,7 +265,7 @@ via TERMINATE-THREAD."
     (bt2:condition-notify (thread-pool-cvar thread-pool)))
   (values))
 
-(defun thread-pool-restart (thread-pool)
+(defun pool-restart (thread-pool)
   "Calling thread-pool-shutdown will not destroy the pool object, but set the slot %shutdown t.
 This function set the slot %shutdown nil so that the pool will be used then.
 Return t if the pool has been shutdown, and return nil if the pool was active"

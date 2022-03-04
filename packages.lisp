@@ -40,14 +40,14 @@
            #:inspect-work
            #:peek-backlog
            #:add-thread
-           #:add
-           #:add-many
+           #:add-task
+           #:add-tasks
            #:add-work
            #:add-works
            #:get-result
            #:get-status
            #:cancel-work
-           #:thread-pool-flush
-           #:thread-pool-shutdown
-           #:thread-pool-restart
+           #:pool-flush
+           #:pool-shutdown
+           #:pool-restart
            #:terminate-work))
