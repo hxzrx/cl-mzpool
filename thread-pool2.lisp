@@ -7,8 +7,8 @@
                         (:predicate thread-pool-p))
   (name              (concatenate 'string "THREAD-POOL-" (string (gensym))) :type string)
   (initial-bindings  nil            :type list)
-  (lock              (bt:make-lock "THREAD-POOL-LOCK"))
-  (cvar              (bt:make-condition-variable :name "THREAD-POOL-CVAR"))
+  (lock              (bt2:make-lock :name "THREAD-POOL-LOCK"))
+  (cvar              (bt2:make-condition-variable :name "THREAD-POOL-CVAR"))
   (backlog           (sb-concurrency:make-queue  :name "THREAD POOL PENDING WORK-ITEM QUEUE"))
   (max-worker-num    *default-worker-num* :type fixnum)       ; num of worker threads
   (thread-table      (make-hash-table :weakness :value :synchronized t) :type hash-table) ; may have some dead threads due to gc
@@ -118,11 +118,12 @@ or the status of the work if the work has not finished."
                                (idle-time-remaining (- end-idle-time (get-internal-run-time))))
                           (when (minusp idle-time-remaining)
                             (exit-while-idle))
-                          (format t "waiting for cvar.~%")
                           (bt2:with-lock-held (lock)
-                            (bt2:condition-wait cvar
-                                                lock
-                                                :timeout (/ idle-time-remaining internal-time-units-per-second))))))))
+                            (loop until (thread-pool-peek-backlog thread-pool)
+                                  do (or (bt2:condition-wait cvar lock
+                                                             :timeout (/ idle-time-remaining
+                                                                         internal-time-units-per-second))
+                                         (return)))))))))
             (unwind-protect-unwind-only
                 (catch 'terminate-work
                   (let ((result (multiple-value-list (funcall (work-item-function work)))))
@@ -200,7 +201,6 @@ And it will be set to the pool provided")
     (when (and (<= (thread-pool-idle-num pool) 0)
                (< (thread-pool-n-concurrent-threads pool)
                   max-worker-num))
-      (format t "create new thread~%")
       (bt2:make-thread (lambda () (thread-pool-main pool))
                        :name (concatenate 'string "Worker of " (thread-pool-name pool))
                        :initial-bindings (thread-pool-initial-bindings pool))
