@@ -40,7 +40,7 @@
   (print-unreadable-object (pool stream :type t)
     (format stream (inspect-pool pool))))
 
-(defun thread-pool-peek-backlog (pool)
+(defun peek-backlog (pool)
   "Return the top pending works of the pool. Return NIL if no pending work in the queue."
   (peek-queue (thread-pool-backlog pool)))
 
@@ -80,11 +80,11 @@
   "Get the result of this `work', returns two values:
 The second value denotes if the work has finished.
 The first value is the function's returned value list of this work,
-or the status of the work if the work has not finished."
+or nil if the work has not finished."
   (with-slots (status result) work
     (if (eq status :finished)
         (values result t)
-        (values status nil))))
+        (values nil nil))))
 
 (defmethod get-status ((work work-item))
   "Return the status of an work-item instance."
@@ -123,7 +123,7 @@ or the status of the work if the work has not finished."
                           (when (minusp idle-time-remaining)
                             (exit-while-idle))
                           (bt2:with-lock-held (lock)
-                            (loop until (thread-pool-peek-backlog thread-pool)
+                            (loop until (peek-backlog thread-pool)
                                   do (or (bt2:condition-wait cvar lock
                                                              :timeout (/ idle-time-remaining
                                                                          internal-time-units-per-second))
@@ -138,7 +138,14 @@ or the status of the work if the work has not finished."
               (setf (work-item-status work) :rejected)
               (bt2:destroy-thread self))))))
 
-(defun thread-pool-add (function thread-pool &key (name "") priority bindings desc)
+(defun add-thread (&optional (pool *default-thread-pool*))
+  "Add a thread to a thread pool."
+  (bt2:make-thread (lambda () (thread-pool-main pool))
+                   :name (concatenate 'string "Worker of " (thread-pool-name pool))
+                   :initial-bindings (thread-pool-initial-bindings pool)))
+
+
+(defun add (function thread-pool &key (name "") priority bindings desc)
   "Add a work item to the thread-pool.
 Functions are called concurrently and in FIFO order.
 A work item is returned, which can be passed to THREAD-POOL-CANCEL-ITEM
@@ -175,19 +182,18 @@ thread pool's initial-bindings."
       (bt2:condition-notify (thread-pool-cvar thread-pool)))
     work))
 
-(defun thread-pool-add-many (function values thread-pool &key name priority bindings)
+(defun add-many (function values thread-pool &key name priority bindings)
   "Add many work items to the pool.
 A work item is created for each element of VALUES and FUNCTION is called
 in the pool with that element.
 Returns a list of the work items added."
   (loop for value in values
-        collect (thread-pool-add
-                 (let ((value value))
-                   (lambda () (funcall function value)))
-                 thread-pool
-                 :name name
-                 :priority priority
-                 :bindings bindings)))
+        collect (add (let ((value value))
+                       (lambda () (funcall function value)))
+                     thread-pool
+                     :name name
+                     :priority priority
+                     :bindings bindings)))
 
 (defmethod add-work ((work work-item) &optional (pool *default-thread-pool*) priority)
   "Enqueue a work-item to a thread-pool.
@@ -218,7 +224,7 @@ And it will be set to the pool provided")
   (loop for work in work-list
         collect (add-work work pool priority)))
 
-(defun thread-pool-cancel-item (work-item)
+(defun cancel-work (work-item)
   "Cancel a work item, removing it from its thread-pool.
 Returns true if the item was successfully cancelled,
 false if the item had finished or is currently running on a worker thread."
