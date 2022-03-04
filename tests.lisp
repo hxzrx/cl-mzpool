@@ -6,6 +6,7 @@
 
 (in-package :cl-mzpool-tests)
 
+;;; utils
 
 (defmacro make-parameterless-fun (fun &rest args)
   "(funcall (make-parameterless-fun + 1 3))"
@@ -16,10 +17,13 @@
   (loop for i below n collect (random max)))
 
 
+;;; define test cases
+
 (define-test cl-mzpool-tests)
-(define-test utils :parent cl-mzpool-tests)
-(define-test pool :parent cl-mzpool-tests)
-(define-test pool2 :parent cl-mzpool-tests)
+(define-test mzpool :parent cl-mzpool-tests)
+(define-test utils :parent mzpool)
+(define-test pool :parent mzpool)
+(define-test pool2 :parent mzpool)
 
 (define-test peek-queue :parent utils
   (let ((queue (sb-concurrency:make-queue)))
@@ -76,15 +80,15 @@
 
 (define-test pool2-peek-backlog :parent pool2
   (let ((pool (mpool2:make-thread-pool)))
-    (is eq nil (mpool2::thread-pool-peek-backlog pool))
+    (is eq nil (mpool2::peek-backlog pool))
     (sb-concurrency:enqueue :work1 (mpool2::thread-pool-backlog pool))
-    (is eq :work1 (mpool2:thread-pool-peek-backlog pool))
+    (is eq :work1 (mpool2:peek-backlog pool))
     (sb-concurrency:enqueue :work2 (mpool2::thread-pool-backlog pool))
-    (is eq :work1 (mpool2:thread-pool-peek-backlog pool))
+    (is eq :work1 (mpool2:peek-backlog pool))
     (sb-concurrency:dequeue (mpool2::thread-pool-backlog pool))
-    (is eq :work2 (mpool2:thread-pool-peek-backlog pool))
+    (is eq :work2 (mpool2:peek-backlog pool))
     (sb-concurrency:dequeue (mpool2::thread-pool-backlog pool))
-    (is eq nil (mpool2::thread-pool-peek-backlog pool))))
+    (is eq nil (mpool2:peek-backlog pool))))
 
 (define-test pool2-make-work-item :parent pool2
   (let ((pool (mpool2:make-thread-pool)))
@@ -122,6 +126,9 @@
                                        :thread-pool pool))
          (work9 (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
                                        :thread-pool pool)))
+    (is eq :created (mpool2:get-status work0))
+    (is eq :created (mpool2:get-status work1))
+    (is eq :created (mpool2:get-status work2))
     (finish (mpool2:add-work work0))
     (finish (mpool2:add-work work1 pool))
     (finish (mpool2:add-work work2 pool))
@@ -143,5 +150,125 @@
     (is equal (list 6) (mpool2:get-result work7))
     (is equal (list 6) (mpool2:get-result work8))
     (is equal (list 6) (mpool2:get-result work9))
+    (is eq :finished (mpool2:get-status work0))
+    (is eq :finished (mpool2:get-status work1))
+    (is eq :finished (mpool2:get-status work2))
+    (is eq :finished (mpool2:get-status work3))
+    (is eq nil (mpool2:peek-backlog pool))
+    (is eq nil (mpool2:peek-backlog mpool2:*default-thread-pool*))))
+
+(define-test pool2-add-works-1 :parent pool2
+  (let* ((pool (mpool2:make-thread-pool))
+         (work-list (list (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool))))
+    (finish (mpool2:add-works work-list pool))
     (sleep 0.0001)
-    (is eq nil (mpool2::thread-pool-peek-backlog pool))))
+    (is equal (make-list 10 :initial-element 6)
+        (mapcar #'(lambda (work) (car (mpool2:get-result work))) work-list))
+    (is equal (make-list 10 :initial-element :finished)
+        (mapcar #'(lambda (work) (mpool2:get-status work)) work-list))))
+
+(define-test pool2-add-works-2 :parent pool2
+  (let* ((pool (mpool2:make-thread-pool))
+         (work-list (list (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool))))
+    (finish (mpool2:add-works work-list)) ; use the default pool
+    (sleep 0.0001)
+    (is equal (make-list 10 :initial-element 6)
+        (mapcar #'(lambda (work) (car (mpool2:get-result work))) work-list))
+    (is equal (make-list 10 :initial-element :finished)
+        (mapcar #'(lambda (work) (mpool2:get-status work)) work-list))))
+
+(define-test pool2-pool-main-1 :parent pool2
+  (let* ((pool (mpool2:make-thread-pool))
+         (work-list (list (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function #'(lambda () (+ 1 2 3)))
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool)
+                          (mpool2:make-work-item :function (make-parameterless-fun + 1 2 3)
+                                                 :thread-pool pool))))
+    (with-slots ((backlog mpool2::backlog)) pool
+      (dolist (work work-list)
+        (sb-concurrency:enqueue work backlog)))
+    (is = 10 (sb-concurrency:queue-count (mpool2::thread-pool-backlog pool))) ; no threads
+
+    (finish (mpool2:add-thread pool)) ; add a thread
+
+    ;; run, but will only deal with the works whose status is :ready
+    (sleep 0.0001)
+    (is equal (make-list 10)
+        (mapcar #'(lambda (work) (mpool2:get-result work)) work-list))
+    (is equal (make-list 10 :initial-element :created)
+        (mapcar #'(lambda (work) (mpool2:get-status work)) work-list))
+    (false (mpool2:peek-backlog pool))
+
+    (dolist (work work-list) ; reset the status to ":ready" and add work
+      (setf (mpool2::work-item-status work) :ready)
+      (mpool2:add-work work pool))
+
+    (sleep 0.0001) ; all done
+    (is equal (make-list 10 :initial-element 6)
+        (mapcar #'(lambda (work) (car (mpool2:get-result work))) work-list))
+    (is equal (make-list 10 :initial-element :finished)
+        (mapcar #'(lambda (work) (mpool2:get-status work)) work-list))
+
+    (dolist (work work-list) ; reset work-list
+      (setf (mpool2::work-item-status work) :ready)
+      (setf (mpool2::work-item-result work) nil))
+
+    (with-slots ((backlog mpool2::backlog)) pool ; add to backlog without notify
+      (dolist (work work-list)
+        (sb-concurrency:enqueue work backlog)))
+    (is = 10 (sb-concurrency:queue-count (mpool2::thread-pool-backlog pool))) ; as the thread waiting for cvar
+
+    (bt2:condition-notify (mpool2::thread-pool-cvar pool)) ; notify cvar
+    (sleep 0.0001) ; all done
+    (is equal (make-list 10 :initial-element 6)
+        (mapcar #'(lambda (work) (car (mpool2:get-result work))) work-list))
+    (is equal (make-list 10 :initial-element :finished)
+        (mapcar #'(lambda (work) (mpool2:get-status work)) work-list))
+    (false (mpool2:peek-backlog pool))))
