@@ -301,7 +301,7 @@
                                                  :thread-pool pool))))
     ;; fill thread with long tasks
     (dotimes (i (mpool2::thread-pool-max-worker-num pool))
-      (finish (mpool2:add #'(lambda ()
+      (finish (mpool2:add-task #'(lambda ()
                               (sleep 5)
                               (format t "sleeping tasks finished~%"))
                           pool)))
@@ -341,7 +341,7 @@
                                                  :thread-pool pool))))
     ;; fill thread with long tasks
     (dotimes (i (mpool2::thread-pool-max-worker-num pool))
-      (finish (mpool2:add #'(lambda ()
+      (finish (mpool2:add-task #'(lambda ()
                               (sleep 5)
                               (format t "sleeping tasks finished~%"))
                           pool)))
