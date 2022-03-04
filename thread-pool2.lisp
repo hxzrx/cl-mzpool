@@ -19,6 +19,8 @@
   (shutdown-p        nil)
   (keepalive-time    *default-keepalive-time* :type (unsigned-byte 64)))
 
+(defparameter *default-thread-pool* (make-thread-pool :name "Default Thread Pool"))
+
 (defun inspect-pool (pool &optional (inspect-work-p nil))
   "Return a detail description of the thread pool."
   (format nil "name: ~d, backlog of work: ~d, max workers: ~d, total threads: ~d, working threads: ~d, idle threads: ~d, blocked threads: ~d, shutdownp: ~d~@[, pending works: ~%~{~d~^~&~}~]"
@@ -42,19 +44,20 @@
   "Return the top pending works of the pool. Return NIL if no pending work in the queue."
   (peek-queue (thread-pool-backlog pool)))
 
-(defun thread-pool-n-concurrent-threads (thread-pool)
+(defun thread-pool-n-concurrent-threads (thread-pool) ; effectiveThreads = totalThreads - blockedThread
   "Return the number of threads in the pool are not blocked."
+  (assert (>= (thread-pool-total-threads-num thread-pool) (thread-pool-blocked-num thread-pool)))
   (- (thread-pool-total-threads-num thread-pool)
      (thread-pool-blocked-num thread-pool)))
 
-(defstruct (work-item (:constructor make-work-item (&key name function thread-pool desc))
+(defstruct (work-item (:constructor make-work-item (&key function thread-pool status (name "") (desc "")))
                       (:copier nil)
                       (:predicate work-item-p))
   (name)
   (function nil :type function)
-  (thread-pool nil :type thread-pool)
+  (thread-pool *default-thread-pool* :type thread-pool)
   (result nil :type list)
-  (status :ready :type symbol) ; :running :aborted :ready :finished :cancelled :rejected
+  (status :created :type symbol) ; :created :running :aborted :ready :finished :cancelled :rejected
   (lock (bt2:make-lock))       ; may be useful in the future
   (cvar (bt2:make-condition-variable))
   (desc))
@@ -73,13 +76,23 @@
   (print-unreadable-object (work stream :type t)
     (format stream (inspect-work work))))
 
+(defmethod get-result ((work work-item))
+  "Get the result of this `work', returns two values:
+The second value denotes if the work has finished.
+The first value is the function's returned value list of this work,
+or the status of the work if the work has not finished."
+  (with-slots (status result) work
+    (if (eq status :finished)
+        (values result t)
+        (values status nil))))
+
 (defun thread-pool-main (thread-pool)
   (let* ((self (bt2:current-thread)))
     (loop (let ((work nil))
             (with-slots (backlog max-worker-num keepalive-time lock cvar idle-num) thread-pool
               (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
               (sb-ext:atomic-incf (thread-pool-idle-num thread-pool))
-              (setf (sb-thread:thread-name self) "Thread pool idle worker")
+              ;;(setf (sb-thread:thread-name self) "Thread pool idle worker")
               (let ((start-idle-time (get-internal-run-time)))
                 (flet ((exit-while-idle ()
                          (sb-ext:atomic-decf (thread-pool-idle-num thread-pool))
@@ -90,8 +103,8 @@
                         (alexandria:when-let (wk (sb-concurrency:dequeue backlog))
                           (when (eq (work-item-status wk) :ready)
                             (setf work wk)
-                            #+sbcl (setf (sb-thread:thread-name self)
-                                         (concatenate 'string "Thread pool worker: " (work-item-name work)))
+                            #+:ignore(setf (sb-thread:thread-name self)
+                                  (concatenate 'string "Thread pool worker: " (work-item-name work)))
                             (sb-ext:atomic-decf (thread-pool-idle-num thread-pool))
                             (sb-ext:atomic-incf (thread-pool-working-num thread-pool))
                             (sb-ext:atomic-update (work-item-status wk) #'(lambda (x)
@@ -105,6 +118,7 @@
                                (idle-time-remaining (- end-idle-time (get-internal-run-time))))
                           (when (minusp idle-time-remaining)
                             (exit-while-idle))
+                          (format t "waiting for cvar.~%")
                           (bt2:with-lock-held (lock)
                             (bt2:condition-wait cvar
                                                 lock
@@ -113,11 +127,11 @@
                 (catch 'terminate-work
                   (let ((result (multiple-value-list (funcall (work-item-function work)))))
                     (setf (work-item-result work) result
-                          (work-item-status work) :finished))))
-            (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
-            (sb-ext:atomic-decf (thread-pool-total-threads-num thread-pool))
-            (setf (work-item-status work) :rejected)
-            (bt2:destroy-thread self)))))
+                          (work-item-status work) :finished)))
+              (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
+              (sb-ext:atomic-decf (thread-pool-total-threads-num thread-pool))
+              (setf (work-item-status work) :rejected)
+              (bt2:destroy-thread self))))))
 
 (defun thread-pool-add (function thread-pool &key (name "") priority bindings desc)
   "Add a work item to the thread-pool.
@@ -138,6 +152,7 @@ thread pool's initial-bindings."
                                  (progv vars vals
                                    (funcall function))))
                              function)
+               :status :ready
                :thread-pool thread-pool
                :desc desc)))
     (with-slots (backlog max-worker-num) thread-pool
@@ -148,7 +163,7 @@ thread pool's initial-bindings."
                  (< (thread-pool-n-concurrent-threads thread-pool)
                     max-worker-num))
         (bt2:make-thread (lambda () (thread-pool-main thread-pool))
-                         :name "Idle Worker"
+                         :name (concatenate 'string "Worker of " (thread-pool-name thread-pool))
                          :initial-bindings (thread-pool-initial-bindings thread-pool))
         (sb-ext:atomic-incf (thread-pool-working-num thread-pool))
         (sb-ext:atomic-incf (thread-pool-total-threads-num thread-pool)))
@@ -160,15 +175,44 @@ thread pool's initial-bindings."
 A work item is created for each element of VALUES and FUNCTION is called
 in the pool with that element.
 Returns a list of the work items added."
-  (loop
-    for value in values
-    collect (thread-pool-add
-             (let ((value value))
-               (lambda () (funcall function value)))
-             thread-pool
-             :name name
-             :priority priority
-             :bindings bindings)))
+  (loop for value in values
+        collect (thread-pool-add
+                 (let ((value value))
+                   (lambda () (funcall function value)))
+                 thread-pool
+                 :name name
+                 :priority priority
+                 :bindings bindings)))
+
+(defmethod add-work ((work work-item) &optional (pool *default-thread-pool*) priority)
+  "Enqueue a work-item to a thread-pool.
+The biggest different between `thread-pool-add' and `add-work' is that `add-work' has no bindings specified"
+  (declare (ignore priority))
+  (unless (eq (work-item-thread-pool work) pool)
+    (warn "The thread-pool of the work-item is not as same as the thread-pool provide.
+And it will be set to the pool provided")
+    (setf (work-item-thread-pool work) pool)) ; this will not likly compete by threads
+  (with-slots (backlog max-worker-num) pool
+    (when (thread-pool-shutdown-p pool)
+      (error "Attempted to add work item to a shut down thread pool ~S" pool))
+    (setf (work-item-status work) :ready)
+    (sb-concurrency:enqueue work backlog)
+    (when (and (<= (thread-pool-idle-num pool) 0)
+               (< (thread-pool-n-concurrent-threads pool)
+                  max-worker-num))
+      (format t "create new thread~%")
+      (bt2:make-thread (lambda () (thread-pool-main pool))
+                       :name (concatenate 'string "Worker of " (thread-pool-name pool))
+                       :initial-bindings (thread-pool-initial-bindings pool))
+      (sb-ext:atomic-incf (thread-pool-working-num pool))
+      (sb-ext:atomic-incf (thread-pool-total-threads-num pool)))
+    (bt2:condition-notify (thread-pool-cvar pool)))
+  work)
+
+(defmethod add-works ((work-list list) &optional (pool *default-thread-pool*) priority)
+  "Enqueue a list of works to a thread-pool, and return the list of works enqueued."
+  (loop for work in work-list
+        collect (add-work work pool priority)))
 
 (defun thread-pool-cancel-item (work-item)
   "Cancel a work item, removing it from its thread-pool.
