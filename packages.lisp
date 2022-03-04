@@ -38,14 +38,15 @@
            #:make-work-item
            #:inspect-pool
            #:inspect-work
-           #:thread-pool-peek-backlog
-           #:thread-pool-add
-           #:thread-pool-add-many
+           #:peek-backlog
+           #:add-thread
+           #:add
+           #:add-many
            #:add-work
            #:add-works
            #:get-result
            #:get-status
-           #:thread-pool-cancel-item
+           #:cancel-work
            #:thread-pool-flush
            #:thread-pool-shutdown
            #:thread-pool-restart
