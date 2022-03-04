@@ -13,6 +13,7 @@
            #:thread-pool
            #:work-item
            #:make-thread-pool
+           #:make-work-item
            #:inspect-pool
            #:inspect-work
            #:thread-pool-peek-backlog
@@ -30,14 +31,19 @@
   (:use #:cl #:utils)
   (:nicknames #:mpool2)
   (:export #:*default-keepalive-time*
+           #:*default-thread-pool*
            #:thread-pool
            #:work-item
            #:make-thread-pool
+           #:make-work-item
            #:inspect-pool
            #:inspect-work
            #:thread-pool-peek-backlog
            #:thread-pool-add
            #:thread-pool-add-many
+           #:add-work
+           #:add-works
+           #:get-result
            #:thread-pool-cancel-item
            #:thread-pool-flush
            #:thread-pool-shutdown
