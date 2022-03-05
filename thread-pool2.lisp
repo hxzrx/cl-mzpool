@@ -135,7 +135,7 @@ or nil if the work has not finished."
                           (work-item-status work) :finished)))
               (sb-ext:atomic-decf (thread-pool-working-num thread-pool))
               (sb-ext:atomic-decf (thread-pool-total-threads-num thread-pool))
-              (setf (work-item-status work) :rejected)
+              (setf (work-item-status work) :aborted)
               (bt2:destroy-thread self))))))
 
 (defun add-thread (&optional (pool *default-thread-pool*))
