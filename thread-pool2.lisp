@@ -139,10 +139,13 @@ or nil if the work has not finished."
               (bt2:destroy-thread self))))))
 
 (defun add-thread (&optional (pool *default-thread-pool*))
-  "Add a thread to a thread pool."
-  (bt2:make-thread (lambda () (thread-pool-main pool))
-                   :name (concatenate 'string "Worker of " (thread-pool-name pool))
-                   :initial-bindings (thread-pool-initial-bindings pool)))
+  "Add a thread to the thread pool."
+  (when (> (thread-pool-max-worker-num pool) (thread-pool-total-threads-num pool))
+    (progn (sb-ext:atomic-incf (thread-pool-working-num pool))
+           (sb-ext:atomic-incf (thread-pool-total-threads-num pool))
+           (bt2:make-thread (lambda () (thread-pool-main pool))
+                            :name (concatenate 'string "Worker of " (thread-pool-name pool))
+                            :initial-bindings (thread-pool-initial-bindings pool)))))
 
 
 (defun add-task (function thread-pool &key (name "") priority bindings desc)
@@ -258,7 +261,7 @@ If ABORT is true then worker threads will be terminated
 via TERMINATE-THREAD."
   (with-slots (shutdown-p backlog thread-table) thread-pool
     (setf shutdown-p t)
-    (thread-pool-flush thread-pool)
+    (pool-flush thread-pool)
     (when abort
       (dolist (thread (alexandria:hash-table-values thread-table))
         (ignore-errors (bt2:destroy-thread thread))))
