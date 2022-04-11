@@ -265,7 +265,7 @@
         (sb-concurrency:enqueue work backlog)))
     (is = 10 (sb-concurrency:queue-count (mpool2::thread-pool-backlog pool))) ; as the thread waiting for cvar
 
-    (bt2:condition-notify (mpool2::thread-pool-cvar pool)) ; notify cvar
+    (bt:condition-notify (mpool2::thread-pool-cvar pool)) ; notify cvar
     (sleep 0.0001) ; all done
     (is equal (make-list 10 :initial-element 6)
         (mapcar #'(lambda (work) (car (mpool2:get-result work))) work-list))
