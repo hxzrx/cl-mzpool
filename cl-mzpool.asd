@@ -1,11 +1,12 @@
 (defsystem "cl-mzpool"
-  :version "0.2.0"
+  :version "0.2.1"
   :description "A thread pool ported from Mezzano OS."
   :author "He Xiang-zhi"
   :license "MIT"
   :depends-on (:cl-cpus
                :bordeaux-threads
-               :alexandria)
+               :alexandria
+               #+:sbcl :sb-concurrency)
   :serial t
   :in-order-to ((test-op (test-op "cl-mzpool/tests")))
   :components ((:file "packages")
